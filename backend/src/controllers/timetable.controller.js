@@ -1,5 +1,5 @@
 
-import Timetable from "../models/timetable.model.js";
+import {Timetable} from "../models/timetable.model.js";
 
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";

@@ -67,6 +67,6 @@ timetableSchema.index({
   startTime: 1,
 });
 
-const Timetable = mongoose.model("Timetable", timetableSchema);
+export const Timetable = mongoose.model("Timetable", timetableSchema);
 
-export default Timetable;
+
