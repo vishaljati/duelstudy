@@ -17,12 +17,13 @@ import userRouter from "./routes/user.routes.js"
 import plannerRoutes from "./routes/planner.routes.js";
 import questionLogRoutes from "./routes/questionLog.routes.js";
 import timetableRoutes from "./routes/timetable.routes.js";
-
+import activityRoutes from "./routes/activity.routes.js";
 
 
 app.use("/api/users", userRouter)
 app.use("/api/planner", plannerRoutes);
 app.use("/api/questions", questionLogRoutes);
 app.use("/api/timetable", timetableRoutes);
+app.use("/api/activity", activityRoutes);
 
 export { app }
