@@ -15,8 +15,12 @@ app.use(cookieParser())
 
 import userRouter from "./routes/user.routes.js"
 import plannerRoutes from "./routes/planner.routes.js";
+import questionLogRoutes from "./routes/questionLog.routes.js";
+
+
 
 app.use("/api/users", userRouter)
 app.use("/api/planner", plannerRoutes);
+app.use("/api/questions", questionLogRoutes);
 
 export { app }
