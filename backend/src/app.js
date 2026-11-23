@@ -20,6 +20,7 @@ import timetableRoutes from "./routes/timetable.routes.js";
 import activityRoutes from "./routes/activity.routes.js";
 import friendRoutes from "./routes/friend.routes.js";
 import competitionRoutes from "./routes/competition.routes.js";
+import { errorHandler } from "./middlewares/error.middleware.js";
 
 app.use("/api/users", userRouter)
 app.use("/api/planner", plannerRoutes);
@@ -29,5 +30,6 @@ app.use("/api/activity", activityRoutes);
 app.use("/api/friends", friendRoutes);
 app.use("/api/competition", competitionRoutes);
 
+app.use(errorHandler);
 
 export { app }
