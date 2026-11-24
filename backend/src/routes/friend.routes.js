@@ -1,9 +1,11 @@
 
 import express from "express";
+
 import { verifyJWT } from "../middlewares/auth.middlewares.js";
 
 import {
   sendFriendRequest,
+  searchUsers,
   getIncomingRequests,
   getOutgoingRequests,
   acceptFriendRequest,
@@ -16,7 +18,11 @@ import {
 
 const router = express.Router();
 
+// Protect all friend routes.
 router.use(verifyJWT);
+
+// User discovery
+router.get("/search", searchUsers);
 
 // Friend requests
 router.post("/invite", sendFriendRequest);
@@ -26,9 +32,10 @@ router.get("/requests/outgoing", getOutgoingRequests);
 
 router.patch("/requests/:id/accept", acceptFriendRequest);
 router.patch("/requests/:id/reject", rejectFriendRequest);
+
 router.delete("/requests/:id", cancelFriendRequest);
 
-// Friends
+// Friends management
 router.get("/", getFriends);
 router.delete("/:friendId", removeFriend);
 
