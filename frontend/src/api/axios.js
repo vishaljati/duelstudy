@@ -33,7 +33,7 @@ api.interceptors.response.use(
     if (
       error.response?.status !== 401 ||
       originalRequest._retry ||
-      originalRequest.skipAuthRefresh
+      originalRequest._skipAuthRefresh
     ) {
       return Promise.reject(error);
     }
@@ -63,3 +63,4 @@ api.interceptors.response.use(
 );
 
 export default api;
+
