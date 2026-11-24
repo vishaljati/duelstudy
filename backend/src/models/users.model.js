@@ -5,7 +5,7 @@ import bcrypt from "bcrypt"
 
 const userSchema = new mongoose.Schema(
     {
-        
+
         name: {
             type: String,
             required: [true, "Name is required"],
@@ -22,7 +22,7 @@ const userSchema = new mongoose.Schema(
             trim: true,
         },
 
-        
+
         goal: {
             type: String,
             required: [true, "Academic goal is required"],
@@ -30,14 +30,17 @@ const userSchema = new mongoose.Schema(
             immutable: true,
         },
 
-       
+
         password: {
             type: String,
             required: [true, "Password hash is required"],
             select: false,
         },
-
-       
+        friendId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null,
+        },
         inviteCode: {
             type: String,
             required: true,
@@ -90,7 +93,7 @@ userSchema.methods.generateAccessToken = function () {
             _id: this._id,
             name: this.username,
             email: this.email,
-            
+
         },
         process.env.ACCESS_TOKEN_SECRET,
         {

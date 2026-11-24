@@ -1,5 +1,6 @@
 
-import {Activity} from "../models/activity.model.js";
+import { Activity } from "../models/activity.model.js";
+
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -37,7 +38,9 @@ const isValidDateKey = (dateKey) => {
 
 const addDays = (dateKey, amount) => {
   const date = new Date(`${dateKey}T00:00:00.000Z`);
+
   date.setUTCDate(date.getUTCDate() + amount);
+
   return date.toISOString().slice(0, 10);
 };
 
@@ -52,10 +55,13 @@ const getActivityLevel = (minutes) => {
 // Record a study session.
 export const logActivity = asyncHandler(async (req, res) => {
   const { minutes, date } = req.body;
-
   const dateKey = date || getTodayKey();
 
-  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+  if (
+    !Number.isInteger(minutes) ||
+    minutes < 1 ||
+    minutes > 1440
+  ) {
     throw new ApiError(
       400,
       "Study minutes must be an integer between 1 and 1440"
@@ -66,8 +72,13 @@ export const logActivity = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid date. Use YYYY-MM-DD");
   }
 
-  if (dateKey > getTodayKey()) {
-    throw new ApiError(400, "Future activity cannot be recorded");
+  // Activity can only be recorded for the current IST date.
+  // This prevents historical Daily Duel scores from being changed.
+  if (dateKey !== getTodayKey()) {
+    throw new ApiError(
+      400,
+      "Study activity can only be recorded for today"
+    );
   }
 
   const filter = {
@@ -106,12 +117,19 @@ export const logActivity = asyncHandler(async (req, res) => {
           sessionsCount: 1,
         },
       },
-      { new: true, runValidators: true }
+      {
+        new: true,
+        runValidators: true,
+      }
     );
   }
 
   return res.status(200).json(
-    new ApiResponse(200, activity, "Study activity recorded successfully")
+    new ApiResponse(
+      200,
+      activity,
+      "Study activity recorded successfully"
+    )
   );
 });
 
@@ -171,7 +189,9 @@ export const getActivityCalendar = asyncHandler(async (req, res) => {
     activities.map((item) => [item.dateKey, item])
   );
 
-  const totalDays = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const totalDays = new Date(
+    Date.UTC(year, month, 0)
+  ).getUTCDate();
 
   const days = Array.from({ length: totalDays }, (_, index) => {
     const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(
@@ -224,16 +244,19 @@ export const getActivityStreak = asyncHandler(async (req, res) => {
     .select("dateKey -_id")
     .sort({ dateKey: 1 });
 
-  const activeDates = [...new Set(
-    activities.map((item) => item.dateKey)
-  )];
+  const activeDates = [
+    ...new Set(activities.map((item) => item.dateKey)),
+  ];
 
   const activeSet = new Set(activeDates);
 
   // Current streak includes today if active.
   // Otherwise, it continues from yesterday if yesterday was active.
   let currentStreak = 0;
-  let currentDate = activeSet.has(today) ? today : addDays(today, -1);
+
+  let currentDate = activeSet.has(today)
+    ? today
+    : addDays(today, -1);
 
   while (activeSet.has(currentDate)) {
     currentStreak++;

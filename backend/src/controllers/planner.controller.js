@@ -6,6 +6,23 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
+const TIME_ZONE = "Asia/Kolkata";
+
+const getTodayKey = () => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const values = Object.fromEntries(
+    parts.map(({ type, value }) => [type, value])
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
 const isValidDate = (value) => {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return false;
@@ -17,6 +34,11 @@ const isValidDate = (value) => {
     !Number.isNaN(date.getTime()) &&
     date.toISOString().slice(0, 10) === value
   );
+};
+
+// scheduledDate is stored as UTC midnight, so ISO conversion is intentional.
+const getTaskDateKey = (scheduledDate) => {
+  return scheduledDate.toISOString().slice(0, 10);
 };
 
 const getWeekRange = (weekStart) => {
@@ -54,6 +76,10 @@ const createTask = asyncHandler(async (req, res) => {
 
   if (!isValidDate(scheduledDate)) {
     throw new ApiError(400, "Invalid scheduled date");
+  }
+
+  if (scheduledDate < getTodayKey()) {
+    throw new ApiError(400, "Tasks cannot be scheduled in the past");
   }
 
   const task = await Task.create({
@@ -180,9 +206,29 @@ const updateTask = asyncHandler(async (req, res) => {
     throw new ApiError(400, "No valid fields provided for update");
   }
 
+  const existingTask = await Task.findOne({
+    _id: req.params.id,
+    userId: req.user._id,
+  });
+
+  if (!existingTask) {
+    throw new ApiError(404, "Task not found");
+  }
+
+  const today = getTodayKey();
+  const existingDateKey = getTaskDateKey(existingTask.scheduledDate);
+
+  if (existingDateKey < today) {
+    throw new ApiError(400, "Past tasks cannot be modified");
+  }
+
   if (updates.scheduledDate !== undefined) {
     if (!isValidDate(updates.scheduledDate)) {
       throw new ApiError(400, "Invalid scheduled date");
+    }
+
+    if (updates.scheduledDate < today) {
+      throw new ApiError(400, "Tasks cannot be moved to a past date");
     }
 
     updates.scheduledDate = new Date(
@@ -219,6 +265,29 @@ const updateTaskStatus = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Status must be planned or completed");
   }
 
+  const existingTask = await Task.findOne({
+    _id: req.params.id,
+    userId: req.user._id,
+  });
+
+  if (!existingTask) {
+    throw new ApiError(404, "Task not found");
+  }
+
+  const today = getTodayKey();
+  const taskDateKey = getTaskDateKey(existingTask.scheduledDate);
+
+  if (taskDateKey < today) {
+    throw new ApiError(400, "Past tasks cannot be modified");
+  }
+
+  if (status === "completed" && taskDateKey !== today) {
+    throw new ApiError(
+      400,
+      "A task can only be completed on its scheduled date"
+    );
+  }
+
   const task = await Task.findOneAndUpdate(
     {
       _id: req.params.id,
@@ -252,6 +321,21 @@ const updateTaskStatus = asyncHandler(async (req, res) => {
 
 // 6. DELETE TASK
 const deleteTask = asyncHandler(async (req, res) => {
+  const existingTask = await Task.findOne({
+    _id: req.params.id,
+    userId: req.user._id,
+  });
+
+  if (!existingTask) {
+    throw new ApiError(404, "Task not found");
+  }
+
+  const taskDateKey = getTaskDateKey(existingTask.scheduledDate);
+
+  if (taskDateKey < getTodayKey()) {
+    throw new ApiError(400, "Past tasks cannot be deleted");
+  }
+
   const task = await Task.findOneAndDelete({
     _id: req.params.id,
     userId: req.user._id,
@@ -276,7 +360,7 @@ const getWeeklyProgress = asyncHandler(async (req, res) => {
     throw new ApiError(404, "User not found");
   }
 
-  const requestedWeek = req.query.weekStart || new Date().toISOString().slice(0, 10);
+  const requestedWeek = req.query.weekStart || getTodayKey();
 
   if (!isValidDate(requestedWeek)) {
     throw new ApiError(400, "Invalid weekStart date");

@@ -4,7 +4,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react'
@@ -15,19 +14,19 @@ import { evaluateUnlocks } from '../lib/rewards'
 import { storage } from '../lib/storage'
 import {
   createDefaultSchedule,
-  generateDemoData,
   normalizeData,
   pushActivity,
 } from '../lib/userData'
-import { clampInt, generateInviteCode, uid } from '../lib/utils'
+import { clampInt, uid } from '../lib/utils'
 import { useAuth } from './AuthContext'
 
 import plannerService from '../services/planner.service'
 import questionLogService from '../services/questionLog.service'
+import friendService from '../services/friend.service'
 
 const DataContext = createContext(null)
 
-const CODE_RE = /^DUEL-[A-Z0-9]{6}$/
+
 
 export function DataProvider({ children }) {
   const { user } = useAuth()
@@ -44,9 +43,6 @@ export function DataProvider({ children }) {
     tasks: [],
     weeklyProgress: null,
   }))
-
-  const [users, setUsers] = useState(() => storage.getUsers())
-  const [invites, setInvites] = useState(() => storage.getInvites())
 
   // --------------------------------------------------
   // Planner states
@@ -66,18 +62,25 @@ export function DataProvider({ children }) {
   const [questionError, setQuestionError] = useState('')
   const [questionConfig, setQuestionConfig] = useState(null)
 
-  // Keep the latest question data outside React state so that
-  // rapid updates always use the latest metrics.
   const questionLogsRef = useRef({})
-
-  // Serialize saves for each date independently.
   const questionSaveQueues = useRef(new Map())
-
-  // Prevent responses from an old user updating the current user.
   const questionOwnerRef = useRef(userId)
 
   // --------------------------------------------------
-  // Reset data when the authenticated user changes
+  // Friends API states
+  // --------------------------------------------------
+
+  const [friends, setFriends] = useState([])
+  const [incomingRequests, setIncomingRequests] = useState([])
+  const [outgoingRequests, setOutgoingRequests] = useState([])
+
+  const [friendsLoading, setFriendsLoading] = useState(false)
+  const [friendsError, setFriendsError] = useState('')
+
+  const friendOwnerRef = useRef(userId)
+
+  // --------------------------------------------------
+  // Reset data when authenticated user changes
   // --------------------------------------------------
 
   useEffect(() => {
@@ -133,7 +136,6 @@ export function DataProvider({ children }) {
 
         if (!userId) return next
 
-        // These fields are API-owned and must not be stored locally.
         const {
           tasks,
           weeklyProgress,
@@ -212,7 +214,7 @@ export function DataProvider({ children }) {
   useEffect(() => {
     if (!userId) return
 
-    refreshPlannerData().catch(() => {})
+    refreshPlannerData().catch(() => { })
   }, [userId, refreshPlannerData])
 
   // --------------------------------------------------
@@ -233,7 +235,6 @@ export function DataProvider({ children }) {
         questionLogService.getLogs(),
       ])
 
-      // Ignore responses belonging to a previous account.
       if (questionOwnerRef.current !== ownerId) return
 
       if (config.goal !== user?.goal) {
@@ -267,8 +268,6 @@ export function DataProvider({ children }) {
         questionLogs[dateKey] = metrics
       }
 
-      // Do not overwrite optimistic data for dates that
-      // currently have saves in progress.
       for (const dateKey of questionSaveQueues.current.keys()) {
         if (questionLogsRef.current[dateKey]) {
           questionLogs[dateKey] = {
@@ -289,12 +288,11 @@ export function DataProvider({ children }) {
       return questionLogs
     } catch (error) {
       if (questionOwnerRef.current === ownerId) {
-        const message =
+        setQuestionError(
           error.response?.data?.message ||
           error.message ||
-          'Unable to load question tracker data.'
-
-        setQuestionError(message)
+          'Unable to load question tracker data.',
+        )
       }
 
       throw error
@@ -305,11 +303,10 @@ export function DataProvider({ children }) {
     }
   }, [userId, user?.goal])
 
-  // Load question configuration and history after login.
   useEffect(() => {
     if (!userId) return
 
-    refreshQuestionData().catch(() => {})
+    refreshQuestionData().catch(() => { })
   }, [userId, refreshQuestionData])
 
   // --------------------------------------------------
@@ -386,9 +383,9 @@ export function DataProvider({ children }) {
 
         return task
           ? pushActivity(next, {
-              type: 'delete',
-              text: `Removed “${task.title}”`,
-            })
+            type: 'delete',
+            text: `Removed “${task.title}”`,
+          })
           : next
       })
 
@@ -461,9 +458,7 @@ export function DataProvider({ children }) {
 
       const goalId = user?.goal
 
-      if (!GOALS[goalId]) {
-        return false
-      }
+      if (!GOALS[goalId]) return false
 
       const isValidCategory = GOALS[goalId].categories.some(
         (category) => category.id === categoryId,
@@ -476,11 +471,9 @@ export function DataProvider({ children }) {
 
       const count = clampInt(value, 0, 9999)
 
-      // Read the latest data from the ref, not a stale render.
       const currentDay =
         questionLogsRef.current[dateKey] ?? {}
 
-      // Always submit the complete daily metrics object.
       const updatedDay = {
         ...currentDay,
         [categoryId]: count,
@@ -498,7 +491,6 @@ export function DataProvider({ children }) {
           (category) => category.id === categoryId,
         )?.label ?? categoryId
 
-      // Optimistic UI update.
       update((prev) => {
         const next = {
           ...prev,
@@ -519,31 +511,26 @@ export function DataProvider({ children }) {
         return pushActivity(next, {
           type: 'questions',
           ref: activityRef,
-          text: `Logged ${count} ${label} ${
-            GOALS[goalId].unit
-          } for ${formatDate(dateKey, {
-            month: 'short',
-            day: 'numeric',
-          })}`,
+          text: `Logged ${count} ${label} ${GOALS[goalId].unit
+            } for ${formatDate(dateKey, {
+              month: 'short',
+              day: 'numeric',
+            })}`,
         })
       })
 
       setQuestionSavingCount((prev) => prev + 1)
       setQuestionError('')
 
-      // Wait for the previous save for this date.
       const previousSave =
         questionSaveQueues.current.get(dateKey) ??
         Promise.resolve()
 
       const savePromise = previousSave
-        .catch(() => {})
+        .catch(() => { })
         .then(async () => {
-          if (questionOwnerRef.current !== userId) {
-            return
-          }
+          if (questionOwnerRef.current !== userId) return
 
-          // Read the latest metrics when this queued request runs.
           const latestMetrics = {
             ...(questionLogsRef.current[dateKey] ?? {}),
           }
@@ -574,8 +561,8 @@ export function DataProvider({ children }) {
         ) {
           setQuestionError(
             error.response?.data?.message ||
-              error.message ||
-              'Unable to save question count.',
+            error.message ||
+            'Unable to save question count.',
           )
         }
 
@@ -607,10 +594,10 @@ export function DataProvider({ children }) {
         ...d,
         schedule: slot.id
           ? d.schedule.map((item) =>
-              item.id === slot.id
-                ? { ...item, ...slot }
-                : item,
-            )
+            item.id === slot.id
+              ? { ...item, ...slot }
+              : item,
+          )
           : [...d.schedule, { ...slot, id: uid() }],
       })),
     [update],
@@ -648,93 +635,110 @@ export function DataProvider({ children }) {
         weeklyTargetHours,
       )
 
-      const weeklyProgress = await refreshWeeklyProgress()
-
-      return weeklyProgress
+      return refreshWeeklyProgress()
     },
     [refreshWeeklyProgress],
   )
 
   // --------------------------------------------------
-  // Friends (local simulation)
+  // Friends API
   // --------------------------------------------------
 
-  const saveInvites = useCallback((next) => {
-    storage.saveInvites(next)
-    setInvites(next)
-  }, [])
+  const refreshFriendsData = useCallback(async () => {
+    if (!userId) return
 
-  // Keep invitations in sync when another tab changes them.
+    const ownerId = userId
+
+    setFriendsLoading(true)
+    setFriendsError('')
+
+    try {
+      const [
+        friendsResponse,
+        incomingResponse,
+        outgoingResponse,
+      ] = await Promise.all([
+        friendService.getFriends(),
+        friendService.getIncomingRequests(),
+        friendService.getOutgoingRequests(),
+      ])
+
+      if (friendOwnerRef.current !== ownerId) return
+
+      setFriends(
+        Array.isArray(friendsResponse) ? friendsResponse : [],
+      )
+
+      setIncomingRequests(
+        Array.isArray(incomingResponse) ? incomingResponse : [],
+      )
+
+      setOutgoingRequests(
+        Array.isArray(outgoingResponse) ? outgoingResponse : [],
+      )
+
+      return {
+        friends: friendsResponse,
+        incomingRequests: incomingResponse,
+        outgoingRequests: outgoingResponse,
+      }
+    } catch (error) {
+      if (friendOwnerRef.current === ownerId) {
+        setFriendsError(
+          error.response?.data?.message ||
+          error.message ||
+          'Unable to load friends data.',
+        )
+      }
+
+      throw error
+    } finally {
+      if (friendOwnerRef.current === ownerId) {
+        setFriendsLoading(false)
+      }
+    }
+  }, [userId])
+
   useEffect(() => {
-    const onStorage = (event) => {
-      if (!storage.isAppKey(event.key)) return
+    friendOwnerRef.current = userId
 
-      setInvites(storage.getInvites())
-      setUsers(storage.getUsers())
-    }
+    setFriends([])
+    setIncomingRequests([])
+    setOutgoingRequests([])
+    setFriendsError('')
+    setFriendsLoading(false)
 
-    window.addEventListener('storage', onStorage)
+    if (!userId) return
 
-    return () => {
-      window.removeEventListener('storage', onStorage)
-    }
-  }, [])
+    refreshFriendsData().catch(() => { })
+  }, [userId, refreshFriendsData])
 
-  const userById = useCallback(
-    (id) => users.find((item) => item.id === id) ?? null,
-    [users],
-  )
+  // Current UI supports one study partner.
+  const friendship = friends[0] ?? null
+  const friend = friendship?.friend ?? null
 
-  const myInvites = useMemo(
-    () =>
-      !userId
-        ? []
-        : invites.filter(
-            (invite) =>
-              (invite.fromId === userId ||
-                invite.toId === userId) &&
-              invite.status !== 'removed',
-          ),
-    [invites, userId],
-  )
+  const searchUsers = useCallback(
+    async (query) => {
+      if (!userId || !query?.trim()) return []
 
-  const friendship =
-    myInvites.find(
-      (invite) => invite.status === 'accepted',
-    ) ?? null
-
-  const friendId = friendship
-    ? friendship.fromId === userId
-      ? friendship.toId
-      : friendship.fromId
-    : null
-
-  const friend = friendId ? userById(friendId) : null
-
-  const friendData = useMemo(
-    () =>
-      friend
-        ? normalizeData(
-            storage.getUserData(friend.id),
-            friend.goal,
-          )
-        : null,
-    [friend, invites],
+      return friendService.searchUsers(query.trim())
+    },
+    [userId],
   )
 
   const sendInvite = useCallback(
-    (rawCode) => {
+    async (rawCode) => {
       if (!user) {
-        return { ok: false, error: 'You must be logged in.' }
+        return {
+          ok: false,
+          error: 'You must be logged in.',
+        }
       }
 
       const code = rawCode.trim().toUpperCase()
 
-      if (!CODE_RE.test(code)) {
-        return {
-          ok: false,
-          error: 'Codes look like DUEL-AB12CD.',
-        }
+      if (!/^DUEL-[A-Z0-9]{8}$/.test(code)) {
+        return { ok: false, error: 'Codes look like DUEL-88E7398C.' }
       }
 
       if (code === user.inviteCode) {
@@ -744,253 +748,171 @@ export function DataProvider({ children }) {
         }
       }
 
-      if (friendship) {
+      if (friend) {
         return {
           ok: false,
           error: 'You already have a study partner. Remove them first.',
         }
       }
 
-      const allUsers = storage.getUsers()
+      try {
+        const result = await friendService.sendFriendRequest(code)
 
-      const target = allUsers.find(
-        (item) => item.inviteCode === code,
-      )
+        await refreshFriendsData()
 
-      if (!target) {
+        return {
+          ok: true,
+          name:
+            result?.receiver?.name ||
+            result?.friend?.name ||
+            result?.name ||
+            'your study partner',
+        }
+      } catch (error) {
         return {
           ok: false,
-          error: 'No profile in this browser uses that code.',
+          error:
+            error.response?.data?.message ||
+            error.message ||
+            'Unable to send invitation.',
         }
       }
-
-      const allInvites = storage.getInvites()
-
-      const live = allInvites.filter(
-        (invite) =>
-          invite.status === 'pending' ||
-          invite.status === 'accepted',
-      )
-
-      if (
-        live.some(
-          (invite) =>
-            (invite.fromId === userId &&
-              invite.toId === target.id) ||
-            (invite.fromId === target.id &&
-              invite.toId === userId),
-        )
-      ) {
-        return {
-          ok: false,
-          error: `There is already a pending invitation with ${target.name}.`,
-        }
-      }
-
-      if (
-        live.some(
-          (invite) =>
-            invite.status === 'accepted' &&
-            (invite.fromId === target.id ||
-              invite.toId === target.id),
-        )
-      ) {
-        return {
-          ok: false,
-          error: `${target.name} already has a study partner.`,
-        }
-      }
-
-      setUsers(allUsers)
-
-      saveInvites([
-        ...allInvites,
-        {
-          id: uid(),
-          fromId: userId,
-          toId: target.id,
-          status: 'pending',
-          createdAt: Date.now(),
-        },
-      ])
-
-      update((d) =>
-        pushActivity(d, {
-          type: 'friend',
-          text: `Sent a duel invitation to ${target.name}`,
-        }),
-      )
-
-      return { ok: true, name: target.name }
     },
-    [
-      user,
-      userId,
-      friendship,
-      saveInvites,
-      update,
-    ],
+    [user, friend, refreshFriendsData],
+  )
+
+  const sendFriendRequestToUser = useCallback(
+    async (targetUserId) => {
+      if (!userId) {
+        return {
+          ok: false,
+          error: 'You must be logged in.',
+        }
+      }
+
+      if (!targetUserId) {
+        return {
+          ok: false,
+          error: 'Invalid user.',
+        }
+      }
+
+      if (friend) {
+        return {
+          ok: false,
+          error: 'You already have a study partner. Remove them first.',
+        }
+      }
+
+      try {
+        await friendService.sendFriendRequestToUser(targetUserId)
+
+        await refreshFriendsData()
+
+        return {
+          ok: true,
+          message: 'Friend request sent successfully.',
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          error:
+            error.response?.data?.message ||
+            error.message ||
+            'Unable to send friend request.',
+        }
+      }
+    },
+    [userId, friend, refreshFriendsData],
   )
 
   const respondInvite = useCallback(
-    (id, status) => {
-      const all = storage.getInvites()
+    async (requestId, status) => {
+      if (!userId) return { ok: false }
 
-      const invite = all.find(
-        (item) => item.id === id,
-      )
-
-      if (!invite) return
-
-      const otherId =
-        invite.fromId === userId
-          ? invite.toId
-          : invite.fromId
-
-      const next = all.map((item) => {
-        if (item.id === id) {
+      try {
+        if (status === 'accepted') {
+          await friendService.acceptFriendRequest(requestId)
+        } else if (status === 'rejected') {
+          await friendService.rejectFriendRequest(requestId)
+        } else {
           return {
-            ...item,
-            status,
-            respondedAt: Date.now(),
+            ok: false,
+            error: 'Invalid invitation response.',
           }
         }
 
-        const involvesPair = [
-          item.fromId,
-          item.toId,
-        ].some(
-          (personId) =>
-            personId === userId ||
-            personId === otherId,
-        )
+        await refreshFriendsData()
 
-        if (
-          status === 'accepted' &&
-          item.status === 'pending' &&
-          involvesPair
-        ) {
-          return { ...item, status: 'declined' }
-        }
-
-        return item
-      })
-
-      saveInvites(next)
-
-      if (status === 'accepted') {
-        const other = userById(otherId)
-
-        update((d) =>
-          pushActivity(d, {
-            type: 'friend',
-            text: `You and ${
-              other?.name ?? 'your friend'
-            } are now study partners`,
-          }),
-        )
-      }
-    },
-    [saveInvites, update, userId, userById],
-  )
-
-  const removeFriend = useCallback(() => {
-    if (!friendship) return
-
-    saveInvites(
-      storage.getInvites().map((invite) =>
-        invite.id === friendship.id
-          ? { ...invite, status: 'removed' }
-          : invite,
-      ),
-    )
-  }, [friendship, saveInvites])
-
-  const createSimulatedProfile = useCallback(
-    ({ name, goal }) => {
-      const trimmed = name.trim()
-
-      if (trimmed.length < 2) {
+        return { ok: true }
+      } catch (error) {
         return {
           ok: false,
-          error: 'Give the profile a name (at least 2 characters).',
+          error:
+            error.response?.data?.message ||
+            error.message ||
+            'Unable to respond to invitation.',
         }
       }
+    },
+    [userId, refreshFriendsData],
+  )
 
-      if (!GOALS[goal]) {
+  const cancelInvite = useCallback(
+    async (requestId) => {
+      if (!userId) return { ok: false }
+
+      try {
+        await friendService.cancelFriendRequest(requestId)
+        await refreshFriendsData()
+
+        return { ok: true }
+      } catch (error) {
         return {
           ok: false,
-          error: 'Choose a goal for the profile.',
+          error:
+            error.response?.data?.message ||
+            error.message ||
+            'Unable to cancel invitation.',
         }
       }
+    },
+    [userId, refreshFriendsData],
+  )
 
-      const allUsers = storage.getUsers()
-
-      const profile = {
-        id: uid(),
-        name: trimmed,
-        email: null,
-        goal,
-        simulated: true,
-        createdBy: userId,
-        inviteCode: generateInviteCode(
-          allUsers.map((item) => item.inviteCode),
-        ),
-        createdAt: Date.now(),
+  const removeFriend = useCallback(async () => {
+    if (!userId || !friend) {
+      return {
+        ok: false,
+        error: 'No study partner found.',
       }
+    }
 
-      const nextUsers = [...allUsers, profile]
+    try {
+      const friendId = friend._id || friend.id
 
-      storage.saveUsers(nextUsers)
+      await friendService.removeFriend(friendId)
+      await refreshFriendsData()
 
-      storage.saveUserData(
-        profile.id,
-        generateDemoData(goal, profile.id),
-      )
+      return { ok: true }
+    } catch (error) {
+      return {
+        ok: false,
+        error:
+          error.response?.data?.message ||
+          error.message ||
+          'Unable to remove study partner.',
+      }
+    }
+  }, [userId, friend, refreshFriendsData])
 
-      setUsers(nextUsers)
+  const compareFriend = useCallback(async () => {
+    if (!friend) return null
 
-      return { ok: true, profile }
-    },
-    [userId],
-  )
+    const friendId = friend._id || friend.id
 
-  const deleteSimulatedProfile = useCallback(
-    (id) => {
-      const allUsers = storage
-        .getUsers()
-        .filter(
-          (item) =>
-            !(
-              item.id === id &&
-              item.simulated &&
-              item.createdBy === userId
-            ),
-        )
-
-      storage.saveUsers(allUsers)
-      setUsers(allUsers)
-
-      saveInvites(
-        storage.getInvites().filter(
-          (invite) =>
-            invite.fromId !== id &&
-            invite.toId !== id,
-        ),
-      )
-    },
-    [saveInvites, userId],
-  )
-
-  const simulatedProfiles = useMemo(
-    () =>
-      users.filter(
-        (item) =>
-          item.simulated &&
-          item.createdBy === userId,
-      ),
-    [users, userId],
-  )
+    return friendService.compareFriend(friendId)
+  }, [friend])
 
   // --------------------------------------------------
   // Reward unlocks
@@ -1062,16 +984,20 @@ export function DataProvider({ children }) {
     setWeeklyTarget,
 
     // Friends
-    invites: myInvites,
-    userById,
+    friends,
     friend,
-    friendData,
+    incomingRequests,
+    outgoingRequests,
+    friendsLoading,
+    friendsError,
+    refreshFriendsData,
+    searchUsers,
     sendInvite,
+    sendFriendRequestToUser,
     respondInvite,
+    cancelInvite,
     removeFriend,
-    createSimulatedProfile,
-    deleteSimulatedProfile,
-    simulatedProfiles,
+    compareFriend,
   }
 
   return (

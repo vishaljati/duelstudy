@@ -29,6 +29,7 @@ import friendRoutes from "./routes/friend.routes.js";
 import competitionRoutes from "./routes/competition.routes.js";
 import { errorHandler } from "./middlewares/error.middleware.js";
 
+
 app.use("/api/users", userRouter)
 app.use("/api/planner", plannerRoutes);
 app.use("/api/questions", questionLogRoutes);
