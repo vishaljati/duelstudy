@@ -1,25 +1,30 @@
 
 import { GOALS, LEVEL_SIZE, XP_RULES } from './constants'
-import { addDays, startOfWeek, todayKey, weekKeys } from './dates'
+import {
+  addDays,
+  startOfWeek,
+  todayKey,
+  weekKeys,
+} from './dates'
 
 // --------------------------------------------------
 // Questions
 // --------------------------------------------------
 
 export const dayQuestions = (data, key) =>
-  data.questionLogs[key] ?? {}
+  data.questionLogs?.[key] ?? {}
 
 export const questionsOn = (data, key) =>
   Object.values(dayQuestions(data, key)).reduce(
     (sum, value) => sum + (Number(value) || 0),
-    0,
+    0
   )
 
 export const categoryOn = (data, key, categoryId) =>
   Number(dayQuestions(data, key)[categoryId]) || 0
 
 export const totalQuestions = (data, categoryId) =>
-  Object.values(data.questionLogs).reduce((sum, day) => {
+  Object.values(data.questionLogs ?? {}).reduce((sum, day) => {
     if (categoryId) {
       return sum + (Number(day[categoryId]) || 0)
     }
@@ -28,7 +33,7 @@ export const totalQuestions = (data, categoryId) =>
       sum +
       Object.values(day).reduce(
         (total, value) => total + (Number(value) || 0),
-        0,
+        0
       )
     )
   }, 0)
@@ -38,13 +43,14 @@ export const totalQuestions = (data, categoryId) =>
 // --------------------------------------------------
 
 export const tasksOn = (data, key) =>
-  data.tasks.filter(
-    (task) => String(task.scheduledDate).slice(0, 10) === key,
+  (data.tasks ?? []).filter(
+    (task) =>
+      String(task.scheduledDate).slice(0, 10) === key
   )
 
 export const completedTasks = (data) =>
-  data.tasks.filter(
-    (task) => task.status === 'completed',
+  (data.tasks ?? []).filter(
+    (task) => task.status === 'completed'
   )
 
 export const studyMinutesOn = (data, key) =>
@@ -53,7 +59,7 @@ export const studyMinutesOn = (data, key) =>
     .reduce(
       (sum, task) =>
         sum + (Number(task.durationMinutes) || 0),
-      0,
+      0
     )
 
 // --------------------------------------------------
@@ -62,10 +68,10 @@ export const studyMinutesOn = (data, key) =>
 
 export const isActiveDay = (data, key) =>
   questionsOn(data, key) > 0 ||
-  data.tasks.some(
+  (data.tasks ?? []).some(
     (task) =>
       task.status === 'completed' &&
-      String(task.scheduledDate).slice(0, 10) === key,
+      String(task.scheduledDate).slice(0, 10) === key
   )
 
 export function currentStreak(data, today = todayKey()) {
@@ -85,15 +91,13 @@ export function currentStreak(data, today = todayKey()) {
 
 export function longestStreak(data) {
   const keys = new Set([
-    ...Object.keys(data.questionLogs).filter(
-      (key) => questionsOn(data, key) > 0,
+    ...Object.keys(data.questionLogs ?? {}).filter(
+      (key) => questionsOn(data, key) > 0
     ),
 
-    ...data.tasks
+    ...(data.tasks ?? [])
       .filter((task) => task.status === 'completed')
-      .map((task) =>
-        String(task.scheduledDate).slice(0, 10),
-      ),
+      .map((task) => String(task.scheduledDate).slice(0, 10)),
   ])
 
   let best = 0
@@ -135,14 +139,14 @@ export function weekStats(data, anchorKey = todayKey()) {
       tasksTotal: tasks.length,
 
       tasksDone: tasks.filter(
-        (task) => task.status === 'completed',
+        (task) => task.status === 'completed'
       ).length,
 
       byCategory: Object.fromEntries(
         categories.map((category) => [
           category.id,
           categoryOn(data, key, category.id),
-        ]),
+        ])
       ),
 
       active: isActiveDay(data, key),
@@ -163,27 +167,39 @@ export function weekStats(data, anchorKey = todayKey()) {
 }
 
 // --------------------------------------------------
-// XP calculations
+// MongoDB rewards
 // --------------------------------------------------
 
-const unlockedXP = (data, filter = () => true) =>
-  Object.values(data.unlocked ?? {})
+const getRewardRecords = (data) =>
+  Array.isArray(data.rewardData?.rewards)
+    ? data.rewardData.rewards
+    : []
+
+const unlockedRewardXP = (data, filter = () => true) =>
+  getRewardRecords(data)
     .filter(filter)
     .reduce(
-      (sum, unlock) => sum + (unlock.xp || 0),
-      0,
+      (sum, reward) => sum + (Number(reward.xp) || 0),
+      0
     )
+
+// --------------------------------------------------
+// XP calculations
+// --------------------------------------------------
 
 export const totalXP = (data) =>
   completedTasks(data).length * XP_RULES.task +
   totalQuestions(data) * XP_RULES.question +
-  unlockedXP(data)
+  (
+    Number(data.rewardData?.totalRewardXP) ||
+    unlockedRewardXP(data)
+  )
 
 export function weeklyXP(data, anchorKey = todayKey()) {
   const week = weekStats(data, anchorKey)
 
   const start = new Date(
-    `${startOfWeek(anchorKey)}T00:00:00`,
+    `${startOfWeek(anchorKey)}T00:00:00`
   ).getTime()
 
   const end = start + 7 * 86400000
@@ -191,10 +207,15 @@ export function weeklyXP(data, anchorKey = todayKey()) {
   return (
     week.tasksDone * XP_RULES.task +
     week.questions * XP_RULES.question +
-    unlockedXP(
-      data,
-      (unlock) => unlock.ts >= start && unlock.ts < end,
-    )
+    unlockedRewardXP(data, (reward) => {
+      const unlockedAt = new Date(reward.unlockedAt).getTime()
+
+      return (
+        Number.isFinite(unlockedAt) &&
+        unlockedAt >= start &&
+        unlockedAt < end
+      )
+    })
   )
 }
 

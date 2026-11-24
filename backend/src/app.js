@@ -27,7 +27,9 @@ import timetableRoutes from "./routes/timetable.routes.js";
 import activityRoutes from "./routes/activity.routes.js";
 import friendRoutes from "./routes/friend.routes.js";
 import competitionRoutes from "./routes/competition.routes.js";
+import rewardRouter from "./routes/reward.routes.js";
 import { errorHandler } from "./middlewares/error.middleware.js";
+
 
 
 app.use("/api/users", userRouter)
@@ -37,6 +39,7 @@ app.use("/api/timetable", timetableRoutes);
 app.use("/api/activity", activityRoutes);
 app.use("/api/friends", friendRoutes);
 app.use("/api/competition", competitionRoutes);
+app.use("/api/rewards", rewardRouter);
 
 app.use(errorHandler);
 

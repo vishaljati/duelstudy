@@ -5,8 +5,21 @@ import { User } from "../models/users.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { evaluateRewardsForUser } from "../services/reward.service.js";
 
 const TIME_ZONE = "Asia/Kolkata";
+
+// Safely evaluate rewards without failing an already successful task operation.
+const safelyEvaluateRewards = async (userId) => {
+  try {
+    await evaluateRewardsForUser(userId);
+  } catch (error) {
+    console.error("Reward evaluation failed:", {
+      userId: userId.toString(),
+      message: error.message,
+    });
+  }
+};
 
 const getTodayKey = () => {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -252,6 +265,11 @@ const updateTask = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Task not found");
   }
 
+  // Re-evaluate if a completed task's details were changed.
+  if (task.status === "completed") {
+    await safelyEvaluateRewards(req.user._id);
+  }
+
   return res
     .status(200)
     .json(new ApiResponse(200, task, "Task updated successfully"));
@@ -307,6 +325,11 @@ const updateTaskStatus = asyncHandler(async (req, res) => {
 
   if (!task) {
     throw new ApiError(404, "Task not found");
+  }
+
+  // Award newly earned rewards after successful task completion.
+  if (status === "completed") {
+    await safelyEvaluateRewards(req.user._id);
   }
 
   const message =

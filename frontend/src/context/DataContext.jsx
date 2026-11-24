@@ -10,7 +10,6 @@ import {
 
 import { GOALS } from '../lib/constants'
 import { formatDate, startOfWeek, todayKey } from '../lib/dates'
-import { evaluateUnlocks } from '../lib/rewards'
 import { storage } from '../lib/storage'
 import {
   createDefaultSchedule,
@@ -23,10 +22,9 @@ import { useAuth } from './AuthContext'
 import plannerService from '../services/planner.service'
 import questionLogService from '../services/questionLog.service'
 import friendService from '../services/friend.service'
+import rewardService from '../services/reward.service'
 
 const DataContext = createContext(null)
-
-
 
 export function DataProvider({ children }) {
   const { user } = useAuth()
@@ -80,6 +78,19 @@ export function DataProvider({ children }) {
   const friendOwnerRef = useRef(userId)
 
   // --------------------------------------------------
+  // Rewards API states
+  // --------------------------------------------------
+
+  const [rewards, setRewards] = useState([])
+  const [rewardSummary, setRewardSummary] = useState(null)
+  const [rewardProgress, setRewardProgress] = useState(null)
+
+  const [rewardsLoading, setRewardsLoading] = useState(false)
+  const [rewardsError, setRewardsError] = useState('')
+
+  const rewardOwnerRef = useRef(userId)
+
+  // --------------------------------------------------
   // Reset data when authenticated user changes
   // --------------------------------------------------
 
@@ -88,10 +99,25 @@ export function DataProvider({ children }) {
     questionLogsRef.current = {}
     questionSaveQueues.current.clear()
 
+    friendOwnerRef.current = userId
+    rewardOwnerRef.current = userId
+
     setQuestionLoading(false)
     setQuestionSavingCount(0)
     setQuestionError('')
     setQuestionConfig(null)
+
+    setFriends([])
+    setIncomingRequests([])
+    setOutgoingRequests([])
+    setFriendsError('')
+    setFriendsLoading(false)
+
+    setRewards([])
+    setRewardSummary(null)
+    setRewardProgress(null)
+    setRewardsError('')
+    setRewardsLoading(false)
 
     if (!userId) {
       setData({
@@ -141,6 +167,7 @@ export function DataProvider({ children }) {
           weeklyProgress,
           weeklyTargetHours,
           questionLogs,
+          unlocked,
           ...localData
         } = next
 
@@ -214,7 +241,7 @@ export function DataProvider({ children }) {
   useEffect(() => {
     if (!userId) return
 
-    refreshPlannerData().catch(() => { })
+    refreshPlannerData().catch(() => {})
   }, [userId, refreshPlannerData])
 
   // --------------------------------------------------
@@ -290,8 +317,8 @@ export function DataProvider({ children }) {
       if (questionOwnerRef.current === ownerId) {
         setQuestionError(
           error.response?.data?.message ||
-          error.message ||
-          'Unable to load question tracker data.',
+            error.message ||
+            'Unable to load question tracker data.',
         )
       }
 
@@ -306,8 +333,73 @@ export function DataProvider({ children }) {
   useEffect(() => {
     if (!userId) return
 
-    refreshQuestionData().catch(() => { })
+    refreshQuestionData().catch(() => {})
   }, [userId, refreshQuestionData])
+
+  // --------------------------------------------------
+  // Rewards API
+  // --------------------------------------------------
+
+  const refreshRewardsData = useCallback(async () => {
+    if (!userId) return
+
+    const ownerId = userId
+
+    setRewardsLoading(true)
+    setRewardsError('')
+
+    try {
+      const [rewardsResponse, progressResponse] = await Promise.all([
+        rewardService.getRewards(),
+        rewardService.getRewardProgress(),
+      ])
+
+      if (rewardOwnerRef.current !== ownerId) return
+
+      const unlockedRewards = Array.isArray(rewardsResponse)
+        ? rewardsResponse
+        : rewardsResponse?.rewards ??
+          rewardsResponse?.unlockedRewards ??
+          []
+
+      const summary = rewardsResponse?.summary ?? null
+
+      const progress =
+        progressResponse?.progress ??
+        progressResponse ??
+        null
+
+      setRewards(unlockedRewards)
+      setRewardSummary(summary)
+      setRewardProgress(progress)
+
+      return {
+        rewards: unlockedRewards,
+        summary,
+        progress,
+      }
+    } catch (error) {
+      if (rewardOwnerRef.current === ownerId) {
+        setRewardsError(
+          error.response?.data?.message ||
+            error.message ||
+            'Unable to load rewards.',
+        )
+      }
+
+      throw error
+    } finally {
+      if (rewardOwnerRef.current === ownerId) {
+        setRewardsLoading(false)
+      }
+    }
+  }, [userId])
+
+  useEffect(() => {
+    if (!userId) return
+
+    refreshRewardsData().catch(() => {})
+  }, [userId, refreshRewardsData])
 
   // --------------------------------------------------
   // Tasks CRUD
@@ -360,9 +452,13 @@ export function DataProvider({ children }) {
 
       await refreshWeeklyProgress()
 
+      if (updatedTask.status === 'completed') {
+        await refreshRewardsData().catch(() => {})
+      }
+
       return updatedTask
     },
-    [update, refreshWeeklyProgress],
+    [update, refreshWeeklyProgress, refreshRewardsData],
   )
 
   const deleteTask = useCallback(
@@ -383,9 +479,9 @@ export function DataProvider({ children }) {
 
         return task
           ? pushActivity(next, {
-            type: 'delete',
-            text: `Removed “${task.title}”`,
-          })
+              type: 'delete',
+              text: `Removed “${task.title}”`,
+            })
           : next
       })
 
@@ -441,9 +537,18 @@ export function DataProvider({ children }) {
 
       await refreshWeeklyProgress()
 
+      if (newStatus === 'completed') {
+        await refreshRewardsData().catch(() => {})
+      }
+
       return updatedTask
     },
-    [data.tasks, update, refreshWeeklyProgress],
+    [
+      data.tasks,
+      update,
+      refreshWeeklyProgress,
+      refreshRewardsData,
+    ],
   )
 
   // --------------------------------------------------
@@ -527,7 +632,7 @@ export function DataProvider({ children }) {
         Promise.resolve()
 
       const savePromise = previousSave
-        .catch(() => { })
+        .catch(() => {})
         .then(async () => {
           if (questionOwnerRef.current !== userId) return
 
@@ -553,6 +658,9 @@ export function DataProvider({ children }) {
           setQuestionError('')
         }
 
+        // Backend evaluates rewards after saving the question log.
+        await refreshRewardsData().catch(() => {})
+
         return true
       } catch (error) {
         if (
@@ -561,8 +669,8 @@ export function DataProvider({ children }) {
         ) {
           setQuestionError(
             error.response?.data?.message ||
-            error.message ||
-            'Unable to save question count.',
+              error.message ||
+              'Unable to save question count.',
           )
         }
 
@@ -581,7 +689,7 @@ export function DataProvider({ children }) {
         }
       }
     },
-    [userId, user?.goal, update],
+    [userId, user?.goal, update, refreshRewardsData],
   )
 
   // --------------------------------------------------
@@ -594,10 +702,10 @@ export function DataProvider({ children }) {
         ...d,
         schedule: slot.id
           ? d.schedule.map((item) =>
-            item.id === slot.id
-              ? { ...item, ...slot }
-              : item,
-          )
+              item.id === slot.id
+                ? { ...item, ...slot }
+                : item,
+            )
           : [...d.schedule, { ...slot, id: uid() }],
       })),
     [update],
@@ -686,8 +794,8 @@ export function DataProvider({ children }) {
       if (friendOwnerRef.current === ownerId) {
         setFriendsError(
           error.response?.data?.message ||
-          error.message ||
-          'Unable to load friends data.',
+            error.message ||
+            'Unable to load friends data.',
         )
       }
 
@@ -710,7 +818,7 @@ export function DataProvider({ children }) {
 
     if (!userId) return
 
-    refreshFriendsData().catch(() => { })
+    refreshFriendsData().catch(() => {})
   }, [userId, refreshFriendsData])
 
   // Current UI supports one study partner.
@@ -915,41 +1023,6 @@ export function DataProvider({ children }) {
   }, [friend])
 
   // --------------------------------------------------
-  // Reward unlocks
-  // --------------------------------------------------
-
-  useEffect(() => {
-    if (!userId) return
-
-    const fresh = evaluateUnlocks(data, {
-      hasFriend: Boolean(friend),
-    })
-
-    const keys = Object.keys(fresh)
-
-    if (!keys.length) return
-
-    update((d) => {
-      let next = {
-        ...d,
-        unlocked: {
-          ...d.unlocked,
-          ...fresh,
-        },
-      }
-
-      for (const key of keys) {
-        next = pushActivity(next, {
-          type: 'reward',
-          text: `${fresh[key].label} (+${fresh[key].xp} XP)`,
-        })
-      }
-
-      return next
-    })
-  }, [data, friend, update, userId])
-
-  // --------------------------------------------------
   // Context value
   // --------------------------------------------------
 
@@ -974,6 +1047,14 @@ export function DataProvider({ children }) {
     questionSaving: questionSavingCount > 0,
     questionError,
     questionConfig,
+
+    // Rewards
+    rewards,
+    rewardSummary,
+    rewardProgress,
+    rewardsLoading,
+    rewardsError,
+    refreshRewardsData,
 
     // Timetable
     saveSlot,
