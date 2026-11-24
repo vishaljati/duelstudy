@@ -7,18 +7,18 @@ import jwt from "jsonwebtoken";
 import { randomBytes } from "node:crypto";
 
 const generateInviteCode = async () => {
-  let inviteCode;
-  let exists = true;
+    let inviteCode;
+    let exists = true;
 
-  while (exists) {
-    inviteCode = `DUEL-${randomBytes(4)
-      .toString("hex")
-      .toUpperCase()}`;
+    while (exists) {
+        inviteCode = `DUEL-${randomBytes(4)
+            .toString("hex")
+            .toUpperCase()}`;
 
-    exists = await User.exists({ inviteCode });
-  }
+        exists = await User.exists({ inviteCode });
+    }
 
-  return inviteCode;
+    return inviteCode;
 };
 
 const generateAccessAndRefreshTokens = async (userId) => {
@@ -39,6 +39,13 @@ const generateAccessAndRefreshTokens = async (userId) => {
         throw new ApiError(500, "Something went wrong while generating Access and Refresh Token")
     }
 }
+
+const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+};
 
 const registerUser = asyncHandler(async (req, res) => {
 
@@ -92,17 +99,14 @@ const registerUser = asyncHandler(async (req, res) => {
 
     }
     const { AccessToken, RefreshToken } = await generateAccessAndRefreshTokens(user._id)
-    const options = {
-        httpOnly: true,  // cookie can not be modified from frontend , can be modified by server
-        secure: true
-    }
+
 
 
     return res.status(200)
-        .cookie("accessToken", AccessToken, options)
-        .cookie("refreshToken", RefreshToken, options)
+        .cookie("accessToken", AccessToken, cookieOptions)
+        .cookie("refreshToken", RefreshToken, cookieOptions)
         .json(
-            new ApiResponse(200, createdUser, "User registered successfully")
+            new ApiResponse(200,  { user: createdUser } , "User registered successfully")
         )
 
 
@@ -134,17 +138,14 @@ const loginUser = asyncHandler(async (req, res) => {
 
     const loggedInUser = await User.findById(user._id).select("-password -refreshTokens")
 
-    const options = {
-        httpOnly: true,  // cookie can not be modified from frontend , can be modified by server
-        secure: true
-    }
+
 
     return res.status(200)
-        .cookie("accessToken", AccessToken, options)
-        .cookie("refreshToken", RefreshToken, options)
+        .cookie("accessToken", AccessToken, cookieOptions)
+        .cookie("refreshToken", RefreshToken, cookieOptions)
         .json(new ApiResponse(200,
             {
-                user: loggedInUser, RefreshToken, AccessToken
+                user: loggedInUser
             },
             "User Logged In Successfully"
         )
@@ -171,14 +172,11 @@ const logOutUser = asyncHandler(async (req, res) => {
 
     )
 
-    const options = {
-        httpOnly: true,  // cookie can not be modified from frontend , can be modified by server
-        secure: true
-    }
+
 
     return res.status(200)
-        .clearCookie("accessToken", options)
-        .clearCookie("refreshToken", options)
+        .clearCookie("accessToken", cookieOptions)
+        .clearCookie("refreshToken", cookieOptions)
         .json(new ApiResponse(200,
             {},
             "User Logged out"
@@ -189,9 +187,9 @@ const logOutUser = asyncHandler(async (req, res) => {
 
 const refreshAccessToken = asyncHandler(async (req, res) => {
 
-    const cookies = req.cookies || {}  
+    const cookies = req.cookies || {}
     const body = req.body || {}
-   
+
 
     const incomingRefreshToken =
         cookies.refreshToken || body.refreshToken;
@@ -218,17 +216,14 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
             throw new ApiError(401, "Refresh token is expired or used");
         }
 
-        const option = {
-            httpOnly: true,
-            secure: true
-        }
+
 
         const { AccessToken, newRefreshToken } = await generateAccessAndRefreshTokens(user._id)
 
 
         return res.status(200)
-            .cookie("accessToken", AccessToken, option)
-            .cookie("refreshToken", newRefreshToken, option)
+            .cookie("accessToken", AccessToken, cookieOptions)
+            .cookie("refreshToken", newRefreshToken, cookieOptions)
             .json(
                 new ApiResponse(
                     200,
@@ -306,7 +301,7 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
         {
             $set: {
                 name
-                
+
             }
         },
         {
