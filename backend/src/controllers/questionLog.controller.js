@@ -1,10 +1,25 @@
+
 import { QuestionLog } from "../models/questionLog.model.js";
-import {User} from "../models/users.model.js";
+import { User } from "../models/users.model.js";
 import { TRACKER_CONFIG } from "../config/questionTracker.js";
 
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+
+import { evaluateRewardsForUser } from "../services/reward.service.js";
+
+// Safely evaluate rewards without failing a successful tracker update.
+const safelyEvaluateRewards = async (userId) => {
+  try {
+    await evaluateRewardsForUser(userId);
+  } catch (error) {
+    console.error("Reward evaluation failed:", {
+      userId: userId.toString(),
+      message: error.message,
+    });
+  }
+};
 
 // Validate date and return UTC midnight.
 const parseDate = (value) => {
@@ -139,6 +154,9 @@ const createQuestionLog = asyncHandler(async (req, res) => {
     }
   );
 
+  // Evaluate rewards after the question log has been saved.
+  await safelyEvaluateRewards(req.user._id);
+
   return res
     .status(200)
     .json(
@@ -208,7 +226,9 @@ const getQuestionLogById = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .json(new ApiResponse(200, log, "Tracker record fetched successfully"));
+    .json(
+      new ApiResponse(200, log, "Tracker record fetched successfully")
+    );
 });
 
 // 4. Delete a daily record.
@@ -224,7 +244,9 @@ const deleteQuestionLog = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .json(new ApiResponse(200, log, "Tracker record deleted successfully"));
+    .json(
+      new ApiResponse(200, log, "Tracker record deleted successfully")
+    );
 });
 
 // 5. Get daily metrics and goal configuration.
@@ -235,6 +257,7 @@ const getDailySummary = asyncHandler(async (req, res) => {
     ? parseDate(req.query.date)
     : (() => {
         const now = new Date();
+
         return new Date(
           Date.UTC(
             now.getUTCFullYear(),

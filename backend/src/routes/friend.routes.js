@@ -14,6 +14,7 @@ import {
   getFriends,
   removeFriend,
   compareFriend,
+  getDailyDuel
 } from "../controllers/friend.controller.js";
 
 const router = express.Router();
@@ -41,5 +42,6 @@ router.delete("/:friendId", removeFriend);
 
 // Study comparison
 router.get("/:friendId/compare", compareFriend);
+router.get("/:friendId/daily-duel", getDailyDuel);
 
 export default router;
