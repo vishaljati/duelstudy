@@ -21,7 +21,9 @@ import {
 } from '../lib/userData'
 import { clampInt, generateInviteCode, uid } from '../lib/utils'
 import { useAuth } from './AuthContext'
+
 import plannerService from '../services/planner.service'
+import questionLogService from '../services/questionLog.service'
 
 const DataContext = createContext(null)
 
@@ -38,6 +40,7 @@ export function DataProvider({ children }) {
 
   const [data, setData] = useState(() => ({
     ...normalizeData(storage.getUserData(userId), user?.goal),
+    questionLogs: {},
     tasks: [],
     weeklyProgress: null,
   }))
@@ -45,27 +48,59 @@ export function DataProvider({ children }) {
   const [users, setUsers] = useState(() => storage.getUsers())
   const [invites, setInvites] = useState(() => storage.getInvites())
 
-  // Planner loading and error states
+  // --------------------------------------------------
+  // Planner states
+  // --------------------------------------------------
+
   const [tasksLoading, setTasksLoading] = useState(false)
   const [tasksError, setTasksError] = useState('')
 
-  // Keep track of the selected week without changing callback identity.
   const activeWeekStart = useRef(startOfWeek(todayKey()))
 
   // --------------------------------------------------
-  // Reset local data when the authenticated user changes
+  // Question tracker states
+  // --------------------------------------------------
+
+  const [questionLoading, setQuestionLoading] = useState(false)
+  const [questionSavingCount, setQuestionSavingCount] = useState(0)
+  const [questionError, setQuestionError] = useState('')
+  const [questionConfig, setQuestionConfig] = useState(null)
+
+  // Keep the latest question data outside React state so that
+  // rapid updates always use the latest metrics.
+  const questionLogsRef = useRef({})
+
+  // Serialize saves for each date independently.
+  const questionSaveQueues = useRef(new Map())
+
+  // Prevent responses from an old user updating the current user.
+  const questionOwnerRef = useRef(userId)
+
+  // --------------------------------------------------
+  // Reset data when the authenticated user changes
   // --------------------------------------------------
 
   useEffect(() => {
+    questionOwnerRef.current = userId
+    questionLogsRef.current = {}
+    questionSaveQueues.current.clear()
+
+    setQuestionLoading(false)
+    setQuestionSavingCount(0)
+    setQuestionError('')
+    setQuestionConfig(null)
+
     if (!userId) {
       setData({
         ...normalizeData(null),
+        questionLogs: {},
         tasks: [],
         weeklyProgress: null,
       })
 
       setTasksError('')
       setTasksLoading(false)
+
       return
     }
 
@@ -76,11 +111,14 @@ export function DataProvider({ children }) {
 
     setData({
       ...freshData,
+      questionLogs: {},
       tasks: [],
       weeklyProgress: null,
     })
 
     setTasksError('')
+    setTasksLoading(false)
+
     activeWeekStart.current = startOfWeek(todayKey())
   }, [userId, user?.goal])
 
@@ -95,12 +133,12 @@ export function DataProvider({ children }) {
 
         if (!userId) return next
 
-        // Tasks, weekly progress and weekly target are API-owned.
-        // Never save them as localStorage source data.
+        // These fields are API-owned and must not be stored locally.
         const {
           tasks,
           weeklyProgress,
           weeklyTargetHours,
+          questionLogs,
           ...localData
         } = next
 
@@ -145,8 +183,6 @@ export function DataProvider({ children }) {
     setTasksError('')
 
     try {
-      // Fetch all tasks so other dashboard components can
-      // continue using historical task data as well.
       const [tasks, weeklyProgress] = await Promise.all([
         plannerService.getTasks(),
         plannerService.getWeeklyProgress(selectedWeek),
@@ -176,8 +212,105 @@ export function DataProvider({ children }) {
   useEffect(() => {
     if (!userId) return
 
-    refreshPlannerData()
+    refreshPlannerData().catch(() => {})
   }, [userId, refreshPlannerData])
+
+  // --------------------------------------------------
+  // QuestionLog API
+  // --------------------------------------------------
+
+  const refreshQuestionData = useCallback(async () => {
+    if (!userId) return
+
+    const ownerId = userId
+
+    setQuestionLoading(true)
+    setQuestionError('')
+
+    try {
+      const [config, logsResponse] = await Promise.all([
+        questionLogService.getConfig(),
+        questionLogService.getLogs(),
+      ])
+
+      // Ignore responses belonging to a previous account.
+      if (questionOwnerRef.current !== ownerId) return
+
+      if (config.goal !== user?.goal) {
+        throw new Error(
+          'Question tracker goal does not match your account.',
+        )
+      }
+
+      if (!Array.isArray(config.metrics)) {
+        throw new Error(
+          'Invalid question tracker configuration received.',
+        )
+      }
+
+      const logs = Array.isArray(logsResponse)
+        ? logsResponse
+        : logsResponse?.logs ?? []
+
+      const questionLogs = {}
+
+      for (const log of logs) {
+        const dateKey = new Date(log.date)
+          .toISOString()
+          .slice(0, 10)
+
+        const metrics =
+          log.metrics instanceof Map
+            ? Object.fromEntries(log.metrics)
+            : { ...(log.metrics ?? {}) }
+
+        questionLogs[dateKey] = metrics
+      }
+
+      // Do not overwrite optimistic data for dates that
+      // currently have saves in progress.
+      for (const dateKey of questionSaveQueues.current.keys()) {
+        if (questionLogsRef.current[dateKey]) {
+          questionLogs[dateKey] = {
+            ...questionLogsRef.current[dateKey],
+          }
+        }
+      }
+
+      questionLogsRef.current = questionLogs
+
+      setQuestionConfig(config)
+
+      setData((prev) => ({
+        ...prev,
+        questionLogs,
+      }))
+
+      return questionLogs
+    } catch (error) {
+      if (questionOwnerRef.current === ownerId) {
+        const message =
+          error.response?.data?.message ||
+          error.message ||
+          'Unable to load question tracker data.'
+
+        setQuestionError(message)
+      }
+
+      throw error
+    } finally {
+      if (questionOwnerRef.current === ownerId) {
+        setQuestionLoading(false)
+      }
+    }
+  }, [userId, user?.goal])
+
+  // Load question configuration and history after login.
+  useEffect(() => {
+    if (!userId) return
+
+    refreshQuestionData().catch(() => {})
+  }, [userId, refreshQuestionData])
 
   // --------------------------------------------------
   // Tasks CRUD
@@ -207,7 +340,6 @@ export function DataProvider({ children }) {
         ),
       )
 
-      // Refresh weekly planned/completed minutes.
       await refreshWeeklyProgress()
 
       return task
@@ -254,9 +386,9 @@ export function DataProvider({ children }) {
 
         return task
           ? pushActivity(next, {
-            type: 'delete',
-            text: `Removed “${task.title}”`,
-          })
+              type: 'delete',
+              text: `Removed “${task.title}”`,
+            })
           : next
       })
 
@@ -322,50 +454,147 @@ export function DataProvider({ children }) {
   // --------------------------------------------------
 
   const setQuestionCount = useCallback(
-    (dateKey, categoryId, value) =>
-      update((d) => {
-        const count = clampInt(value, 0, 9999)
+    async (dateKey, categoryId, value) => {
+      if (!userId || questionOwnerRef.current !== userId) {
+        return false
+      }
 
-        const day = {
-          ...(d.questionLogs[dateKey] ?? {}),
-          [categoryId]: count,
-        }
+      const goalId = user?.goal
 
-        const label =
-          GOALS[d.goal].categories.find(
-            (category) => category.id === categoryId,
-          )?.label ?? categoryId
+      if (!GOALS[goalId]) {
+        return false
+      }
 
+      const isValidCategory = GOALS[goalId].categories.some(
+        (category) => category.id === categoryId,
+      )
+
+      if (!isValidCategory) {
+        setQuestionError('Invalid question tracker category.')
+        return false
+      }
+
+      const count = clampInt(value, 0, 9999)
+
+      // Read the latest data from the ref, not a stale render.
+      const currentDay =
+        questionLogsRef.current[dateKey] ?? {}
+
+      // Always submit the complete daily metrics object.
+      const updatedDay = {
+        ...currentDay,
+        [categoryId]: count,
+      }
+
+      const updatedLogs = {
+        ...questionLogsRef.current,
+        [dateKey]: updatedDay,
+      }
+
+      questionLogsRef.current = updatedLogs
+
+      const label =
+        GOALS[goalId].categories.find(
+          (category) => category.id === categoryId,
+        )?.label ?? categoryId
+
+      // Optimistic UI update.
+      update((prev) => {
         const next = {
-          ...d,
-          questionLogs: {
-            ...d.questionLogs,
-            [dateKey]: day,
-          },
+          ...prev,
+          questionLogs: updatedLogs,
         }
 
-        const ref = `q:${dateKey}:${categoryId}`
+        const activityRef = `q:${dateKey}:${categoryId}`
 
         if (count === 0) {
           return {
             ...next,
             activity: next.activity.filter(
-              (activity) => activity.ref !== ref,
+              (activity) => activity.ref !== activityRef,
             ),
           }
         }
 
         return pushActivity(next, {
           type: 'questions',
-          ref,
-          text: `Logged ${count} ${label} ${GOALS[d.goal].unit
-            } for ${formatDate(dateKey, {
-              month: 'short',
-              day: 'numeric',
-            })}`,
+          ref: activityRef,
+          text: `Logged ${count} ${label} ${
+            GOALS[goalId].unit
+          } for ${formatDate(dateKey, {
+            month: 'short',
+            day: 'numeric',
+          })}`,
         })
-      }),
-    [update],
+      })
+
+      setQuestionSavingCount((prev) => prev + 1)
+      setQuestionError('')
+
+      // Wait for the previous save for this date.
+      const previousSave =
+        questionSaveQueues.current.get(dateKey) ??
+        Promise.resolve()
+
+      const savePromise = previousSave
+        .catch(() => {})
+        .then(async () => {
+          if (questionOwnerRef.current !== userId) {
+            return
+          }
+
+          // Read the latest metrics when this queued request runs.
+          const latestMetrics = {
+            ...(questionLogsRef.current[dateKey] ?? {}),
+          }
+
+          await questionLogService.saveDailyLog({
+            date: dateKey,
+            metrics: latestMetrics,
+          })
+        })
+
+      questionSaveQueues.current.set(dateKey, savePromise)
+
+      try {
+        await savePromise
+
+        if (
+          questionOwnerRef.current === userId &&
+          questionSaveQueues.current.get(dateKey) === savePromise
+        ) {
+          setQuestionError('')
+        }
+
+        return true
+      } catch (error) {
+        if (
+          questionOwnerRef.current === userId &&
+          questionSaveQueues.current.get(dateKey) === savePromise
+        ) {
+          setQuestionError(
+            error.response?.data?.message ||
+              error.message ||
+              'Unable to save question count.',
+          )
+        }
+
+        return false
+      } finally {
+        if (questionOwnerRef.current === userId) {
+          setQuestionSavingCount((prev) =>
+            Math.max(0, prev - 1),
+          )
+
+          if (
+            questionSaveQueues.current.get(dateKey) === savePromise
+          ) {
+            questionSaveQueues.current.delete(dateKey)
+          }
+        }
+      }
+    },
+    [userId, user?.goal, update],
   )
 
   // --------------------------------------------------
@@ -378,10 +607,10 @@ export function DataProvider({ children }) {
         ...d,
         schedule: slot.id
           ? d.schedule.map((item) =>
-            item.id === slot.id
-              ? { ...item, ...slot }
-              : item,
-          )
+              item.id === slot.id
+                ? { ...item, ...slot }
+                : item,
+            )
           : [...d.schedule, { ...slot, id: uid() }],
       })),
     [update],
@@ -461,17 +690,18 @@ export function DataProvider({ children }) {
       !userId
         ? []
         : invites.filter(
-          (invite) =>
-            (invite.fromId === userId ||
-              invite.toId === userId) &&
-            invite.status !== 'removed',
-        ),
+            (invite) =>
+              (invite.fromId === userId ||
+                invite.toId === userId) &&
+              invite.status !== 'removed',
+          ),
     [invites, userId],
   )
 
-  const friendship = myInvites.find(
-    (invite) => invite.status === 'accepted',
-  ) ?? null
+  const friendship =
+    myInvites.find(
+      (invite) => invite.status === 'accepted',
+    ) ?? null
 
   const friendId = friendship
     ? friendship.fromId === userId
@@ -485,9 +715,9 @@ export function DataProvider({ children }) {
     () =>
       friend
         ? normalizeData(
-          storage.getUserData(friend.id),
-          friend.goal,
-        )
+            storage.getUserData(friend.id),
+            friend.goal,
+          )
         : null,
     [friend, invites],
   )
@@ -654,8 +884,9 @@ export function DataProvider({ children }) {
         update((d) =>
           pushActivity(d, {
             type: 'friend',
-            text: `You and ${other?.name ?? 'your friend'
-              } are now study partners`,
+            text: `You and ${
+              other?.name ?? 'your friend'
+            } are now study partners`,
           }),
         )
       }
@@ -816,6 +1047,11 @@ export function DataProvider({ children }) {
 
     // Questions
     setQuestionCount,
+    refreshQuestionData,
+    questionLoading,
+    questionSaving: questionSavingCount > 0,
+    questionError,
+    questionConfig,
 
     // Timetable
     saveSlot,
