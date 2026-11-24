@@ -53,3 +53,11 @@ const startServer = async () => {
 };
 
 startServer();
+
+app.get("/health", (req, res) => {
+    res.status(200).json({
+        success: true,
+        message: "DuelStudy backend is healthy",
+        timestamp: new Date().toISOString(),
+    });
+});
