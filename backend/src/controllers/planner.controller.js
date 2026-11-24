@@ -6,35 +6,8 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
-// Helper: Get current week's UTC date range (Monday to Monday)
-const getWeekRange = () => {
-  const now = new Date();
-
-  const start = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate()
-    )
-  );
-
-  const day = start.getUTCDay();
-  const daysSinceMonday = (day + 6) % 7;
-
-  start.setUTCDate(start.getUTCDate() - daysSinceMonday);
-
-  const end = new Date(start);
-  end.setUTCDate(end.getUTCDate() + 7);
-
-  return { start, end };
-};
-
-// Helper: Validate YYYY-MM-DD date
 const isValidDate = (value) => {
-  if (
-    typeof value !== "string" ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(value)
-  ) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return false;
   }
 
@@ -46,6 +19,20 @@ const isValidDate = (value) => {
   );
 };
 
+const getWeekRange = (weekStart) => {
+  const anchor = new Date(`${weekStart}T00:00:00.000Z`);
+
+  const start = new Date(anchor);
+  const daysSinceMonday = (start.getUTCDay() + 6) % 7;
+
+  start.setUTCDate(start.getUTCDate() - daysSinceMonday);
+
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 7);
+
+  return { start, end };
+};
+
 // 1. CREATE TASK
 const createTask = asyncHandler(async (req, res) => {
   const {
@@ -53,6 +40,7 @@ const createTask = asyncHandler(async (req, res) => {
     description,
     subject,
     scheduledDate,
+    scheduledTime,
     durationMinutes,
     priority,
   } = req.body;
@@ -74,6 +62,7 @@ const createTask = asyncHandler(async (req, res) => {
     description,
     subject,
     scheduledDate: new Date(`${scheduledDate}T00:00:00.000Z`),
+    scheduledTime: scheduledTime || null,
     durationMinutes,
     priority,
   });
@@ -83,40 +72,66 @@ const createTask = asyncHandler(async (req, res) => {
     .json(new ApiResponse(201, task, "Task created successfully"));
 });
 
-// 2. GET ALL TASKS
+// 2. GET TASKS
 const getTasks = asyncHandler(async (req, res) => {
   const filter = {
     userId: req.user._id,
   };
 
-  // Optional date filter
-  if (req.query.date) {
-    if (!isValidDate(req.query.date)) {
+  const { date, startDate, endDate, status } = req.query;
+
+  if (date && (startDate || endDate)) {
+    throw new ApiError(
+      400,
+      "Use either date or startDate/endDate filters, not both"
+    );
+  }
+
+  if (date) {
+    if (!isValidDate(date)) {
       throw new ApiError(400, "Invalid date filter");
     }
 
-    const date = new Date(`${req.query.date}T00:00:00.000Z`);
+    const start = new Date(`${date}T00:00:00.000Z`);
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 1);
 
-    const nextDate = new Date(date);
-    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
-
-    filter.scheduledDate = {
-      $gte: date,
-      $lt: nextDate,
-    };
+    filter.scheduledDate = { $gte: start, $lt: end };
   }
 
-  // Optional status filter
-  if (req.query.status) {
-    if (!["planned", "completed"].includes(req.query.status)) {
+  if (startDate || endDate) {
+    if (!startDate || !endDate) {
+      throw new ApiError(
+        400,
+        "Both startDate and endDate are required"
+      );
+    }
+
+    if (!isValidDate(startDate) || !isValidDate(endDate)) {
+      throw new ApiError(400, "Invalid date range");
+    }
+
+    const start = new Date(`${startDate}T00:00:00.000Z`);
+    const end = new Date(`${endDate}T00:00:00.000Z`);
+
+    if (start >= end) {
+      throw new ApiError(400, "endDate must be after startDate");
+    }
+
+    filter.scheduledDate = { $gte: start, $lt: end };
+  }
+
+  if (status) {
+    if (!["planned", "completed"].includes(status)) {
       throw new ApiError(400, "Invalid task status");
     }
 
-    filter.status = req.query.status;
+    filter.status = status;
   }
 
   const tasks = await Task.find(filter).sort({
     scheduledDate: 1,
+    scheduledTime: 1,
     createdAt: -1,
   });
 
@@ -148,6 +163,7 @@ const updateTask = asyncHandler(async (req, res) => {
     "description",
     "subject",
     "scheduledDate",
+    "scheduledTime",
     "durationMinutes",
     "priority",
   ];
@@ -179,9 +195,7 @@ const updateTask = asyncHandler(async (req, res) => {
       _id: req.params.id,
       userId: req.user._id,
     },
-    {
-      $set: updates,
-    },
+    { $set: updates },
     {
       new: true,
       runValidators: true,
@@ -197,15 +211,12 @@ const updateTask = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, task, "Task updated successfully"));
 });
 
-// 5. COMPLETE / REOPEN TASK
+// 5. UPDATE TASK STATUS
 const updateTaskStatus = asyncHandler(async (req, res) => {
   const { status } = req.body;
 
   if (!["planned", "completed"].includes(status)) {
-    throw new ApiError(
-      400,
-      "Status must be planned or completed"
-    );
+    throw new ApiError(400, "Status must be planned or completed");
   }
 
   const task = await Task.findOneAndUpdate(
@@ -265,53 +276,66 @@ const getWeeklyProgress = asyncHandler(async (req, res) => {
     throw new ApiError(404, "User not found");
   }
 
-  const { start, end } = getWeekRange();
+  const requestedWeek = req.query.weekStart || new Date().toISOString().slice(0, 10);
 
-  const result = await Task.aggregate([
-    {
-      $match: {
-        userId: user._id,
-        status: "completed",
-        completedAt: {
-          $gte: start,
-          $lt: end,
+  if (!isValidDate(requestedWeek)) {
+    throw new ApiError(400, "Invalid weekStart date");
+  }
+
+  const { start, end } = getWeekRange(requestedWeek);
+
+  const [plannedResult, completedResult] = await Promise.all([
+    Task.aggregate([
+      {
+        $match: {
+          userId: user._id,
+          scheduledDate: { $gte: start, $lt: end },
         },
       },
-    },
-    {
-      $group: {
-        _id: null,
-        completedMinutes: {
-          $sum: "$durationMinutes",
-        },
-        completedTasks: {
-          $sum: 1,
+      {
+        $group: {
+          _id: null,
+          plannedMinutes: { $sum: "$durationMinutes" },
         },
       },
-    },
+    ]),
+    Task.aggregate([
+      {
+        $match: {
+          userId: user._id,
+          status: "completed",
+          completedAt: { $gte: start, $lt: end },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          completedMinutes: { $sum: "$durationMinutes" },
+          completedTasks: { $sum: 1 },
+        },
+      },
+    ]),
   ]);
 
-  const completedMinutes = result[0]?.completedMinutes || 0;
-  const completedTasks = result[0]?.completedTasks || 0;
+  const plannedMinutes = plannedResult[0]?.plannedMinutes || 0;
+  const completedMinutes = completedResult[0]?.completedMinutes || 0;
+  const completedTasks = completedResult[0]?.completedTasks || 0;
 
-  const targetMinutes = user.weeklyTargetHours * 60;
-
-  const progressPercentage = Math.min(
-    Math.round((completedMinutes / targetMinutes) * 100),
-    100
-  );
+  const weeklyTargetHours = user.weeklyTargetHours;
+  const targetMinutes = weeklyTargetHours * 60;
 
   const progress = {
-    weeklyTargetHours: user.weeklyTargetHours,
+    weeklyTargetHours,
     targetMinutes,
+    plannedMinutes,
     completedMinutes,
     completedHours: Number((completedMinutes / 60).toFixed(2)),
     completedTasks,
-    remainingMinutes: Math.max(
-      targetMinutes - completedMinutes,
-      0
+    remainingMinutes: Math.max(targetMinutes - completedMinutes, 0),
+    progressPercentage: Math.min(
+      Math.round((completedMinutes / targetMinutes) * 100),
+      100
     ),
-    progressPercentage,
     weekStart: start,
     weekEnd: end,
   };
@@ -340,9 +364,7 @@ const updateWeeklyTarget = asyncHandler(async (req, res) => {
 
   const user = await User.findByIdAndUpdate(
     req.user._id,
-    {
-      $set: { weeklyTargetHours },
-    },
+    { $set: { weeklyTargetHours } },
     {
       new: true,
       runValidators: true,

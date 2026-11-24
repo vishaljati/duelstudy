@@ -36,6 +36,16 @@ const taskSchema = new mongoose.Schema(
       required: true,
     },
 
+    scheduledTime: {
+      type: String,
+      default: null,
+      validate: {
+        validator: (value) =>
+          value === null || /^([01]\d|2[0-3]):([0-5]\d)$/.test(value),
+        message: "Scheduled time must use HH:mm format",
+      },
+    },
+
     durationMinutes: {
       type: Number,
       required: true,
@@ -64,8 +74,7 @@ const taskSchema = new mongoose.Schema(
 );
 
 taskSchema.index({ userId: 1, scheduledDate: 1 });
-
-
+taskSchema.index({ userId: 1, scheduledDate: 1, status: 1 });
 taskSchema.index({ userId: 1, status: 1, completedAt: 1 });
 
 export const Task = mongoose.model("Task", taskSchema);
