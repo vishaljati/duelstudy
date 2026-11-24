@@ -67,10 +67,16 @@ export function AppShell() {
   const { user } = useData()
   const navigate = useNavigate()
 
-  const handleLogout = () => {
-    logout()
-    navigate('/', { replace: true })
-  }
+  const handleLogout = async () => {
+    const result = await logout();
+
+    if (!result.ok) {
+      console.error(result.message);
+      return;
+    }
+
+    navigate("/", { replace: true });
+  };
 
   return (
     <div className="min-h-dvh lg:flex">

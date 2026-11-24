@@ -1,8 +1,10 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
 import { AppShell } from './components/layout/AppShell'
-import { RequireAuth, PublicOnly } from './components/layout/RouteGuards'
+import RequireAuth from './components/auth/RequireAuth.jsx'
+import PublicOnly from './components/auth/PublicOnly.jsx'
 import { ScrollToTop } from './components/layout/ScrollToTop'
 import { AuthProvider } from './context/AuthContext'
+import { DataProvider } from './context/DataContext'
 import Competition from './pages/Competition'
 import Dashboard from './pages/Dashboard'
 import Friends from './pages/Friends'
@@ -16,6 +18,14 @@ import Rewards from './pages/Rewards'
 import Signup from './pages/Signup'
 import Timetable from './pages/Timetable'
 
+function AuthenticatedApp() {
+  return (
+    <DataProvider>
+      <AppShell />
+    </DataProvider>
+  )
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -28,7 +38,7 @@ export default function App() {
             <Route path="/signup" element={<Signup />} />
           </Route>
           <Route element={<RequireAuth />}>
-            <Route element={<AppShell />}>
+            <Route element={<AuthenticatedApp />}>
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/planner" element={<Planner />} />
               <Route path="/questions" element={<Questions />} />

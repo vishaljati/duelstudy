@@ -1,20 +1,36 @@
-import { Navigate, Outlet, useLocation } from 'react-router'
-import { useAuth } from '../../context/AuthContext'
-import { DataProvider } from '../../context/DataContext'
+
+
+import { Navigate, Outlet } from "react-router";
+import { useAuth } from "../../context/AuthContext";
 
 export function RequireAuth() {
-  const { user } = useAuth()
-  const location = useLocation()
-  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />
-  return (
-    <DataProvider key={user.id}>
-      <Outlet />
-    </DataProvider>
-  )
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <p className="text-sm text-muted">
+          Restoring your session...
+        </p>
+      </div>
+    );
+  }
+
+  return user ? <Outlet /> : <Navigate to="/login" replace />;
 }
 
 export function PublicOnly() {
-  const { user } = useAuth()
-  if (user) return <Navigate to="/dashboard" replace />
-  return <Outlet />
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <p className="text-sm text-muted">
+          Loading...
+        </p>
+      </div>
+    );
+  }
+
+  return user ? <Navigate to="/dashboard" replace /> : <Outlet />;
 }

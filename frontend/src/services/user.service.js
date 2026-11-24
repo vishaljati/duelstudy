@@ -62,7 +62,6 @@ const userService = {
   loginUser,
   getCurrentUser,
   logoutUser,
-  changePassword,
   updateAccount,
 };
 

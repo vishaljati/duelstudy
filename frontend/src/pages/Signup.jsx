@@ -23,14 +23,26 @@ export default function Signup() {
     setErrors((er) => ({ ...er, [field]: undefined, form: undefined }))
   }
 
-  const onSubmit = async (e) => {
-    e.preventDefault()
-    setSubmitting(true)
-    const result = await signup(form)
-    setSubmitting(false)
-    if (!result.ok) return setErrors(result.errors)
-    navigate('/dashboard', { replace: true })
+
+const onSubmit = async (e) => {
+  e.preventDefault();
+  setSubmitting(true);
+  setErrors({});
+
+  try {
+    const result = await signup(form);
+
+    if (!result.ok) {
+      setErrors(result.errors || {});
+      return;
+    }
+
+    navigate("/dashboard", { replace: true });
+  } finally {
+    setSubmitting(false);
   }
+};
+
 
   return (
     <AuthLayout

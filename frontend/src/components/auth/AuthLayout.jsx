@@ -17,9 +17,6 @@ export function AuthLayout({ title, description, children, footer }) {
         <div className="mt-6">{children}</div>
       </main>
       <p className="relative mt-6 text-sm text-muted">{footer}</p>
-      <p className="relative mt-3 max-w-sm text-center text-xs text-muted/70">
-        Accounts are stored only in this browser — a frontend simulation, not a real server.
-      </p>
     </div>
   )
 }
