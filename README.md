@@ -1,6 +1,6 @@
 <div align="center">
 
-# 📚 DualStudy
+# 📚 DuelStudy
 
 **A study planner and accountability platform where you compete with friends, not with distractions.**
 
